@@ -1,0 +1,4 @@
+-r requirements-web.txt
+matplotlib==3.10.3
+pytest==9.1.1
+httpx==0.28.1

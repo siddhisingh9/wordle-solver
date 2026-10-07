@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wordle Solver</title>
+<meta name="description" content="An entropy-based Wordle solver with word-frequency priors and 2-step lookahead.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Crect width='9' height='9' rx='2' fill='%236aaa64'/%3E%3Crect x='11' width='9' height='9' rx='2' fill='%23c9b458'/%3E%3Crect y='11' width='9' height='9' rx='2' fill='%23787c7e'/%3E%3Crect x='11' y='11' width='9' height='9' rx='2' fill='%236aaa64'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #fafaf8;
+  --surface: #ffffff;
+  --surface-2: #f2f1ed;
+  --border: #dcdad3;
+  --border-strong: #b9b6ad;
+  --text: #121212;
+  --text-2: #55534d;
+  --text-3: #85827a;
+  --accent: #2a78d6;
+  --accent-track: #e3edf9;
+  --green: #6aaa64;
+  --yellow: #c9b458;
+  --gray: #787c7e;
+  --tile-text: #ffffff;
+  --key: #e2e1dc;
+  --danger: #c23b3b;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.05);
+  --radius: 12px;
+  --tile: clamp(44px, 12vw, 58px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121213;
+    --surface: #1b1b1c;
+    --surface-2: #232325;
+    --border: #36363a;
+    --border-strong: #565659;
+    --text: #f4f4f2;
+    --text-2: #c3c2b7;
+    --text-3: #8d8c86;
+    --accent: #3987e5;
+    --accent-track: #1f2d40;
+    --green: #538d4e;
+    --yellow: #b59f3b;
+    --gray: #3a3a3c;
+    --key: #3a3a3c;
+    --danger: #e66767;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121213;
+  --surface: #1b1b1c;
+  --surface-2: #232325;
+  --border: #36363a;
+  --border-strong: #565659;
+  --text: #f4f4f2;
+  --text-2: #c3c2b7;
+  --text-3: #8d8c86;
+  --accent: #3987e5;
+  --accent-track: #1f2d40;
+  --green: #538d4e;
+  --yellow: #b59f3b;
+  --gray: #3a3a3c;
+  --key: #3a3a3c;
+  --danger: #e66767;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+header {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky; top: 0; z-index: 5;
+}
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: -.01em; }
+.logo { display: grid; grid-template-columns: repeat(2, 9px); gap: 2px; }
+.logo span { width: 9px; height: 9px; border-radius: 2px; }
+.logo span:nth-child(1) { background: var(--green); }
+.logo span:nth-child(2) { background: var(--yellow); }
+.logo span:nth-child(3) { background: var(--gray); }
+.logo span:nth-child(4) { background: var(--green); }
+.tabs { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px; }
+.tab {
+  border: 0; background: transparent; padding: 6px 14px; border-radius: 999px; cursor: pointer;
+  color: var(--text-2); font-weight: 600; font-size: 14px; white-space: nowrap;
+}
+.tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+main.wrap { padding-top: 28px; padding-bottom: 40px; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 28px; align-items: start; }
+.stage { display: flex; flex-direction: column; align-items: center; gap: 16px; min-width: 0; }
+.hint { color: var(--text-2); font-size: 14px; text-align: center; margin: 0; max-width: 420px; }
+.hint kbd {
+  font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; padding: 2px 5px;
+}
+.board { display: grid; gap: 6px; }
+.row { display: grid; grid-template-columns: repeat(5, var(--tile)); gap: 6px; position: relative; }
+.row.over::before {
+  content: "over limit"; position: absolute; right: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  font-size: 11px; color: var(--danger); white-space: nowrap; font-weight: 600;
+}
+.tile {
+  width: var(--tile); height: var(--tile); display: grid; place-items: center;
+  font-weight: 800; font-size: calc(var(--tile) * .5); text-transform: uppercase;
+  border: 2px solid var(--border); background: var(--surface); color: var(--text);
+  border-radius: 4px; user-select: none; padding: 0;
+}
+.tile.filled { border-color: var(--border-strong); }
+.tile.B, .tile.Y, .tile.G { color: var(--tile-text); border-color: transparent; }
+.tile.B { background: var(--gray); }
+.tile.Y { background: var(--yellow); }
+.tile.G { background: var(--green); }
+button.tile { cursor: pointer; transition: transform .08s ease; }
+button.tile:hover { transform: translateY(-1px); }
+button.tile:active { transform: scale(.96); }
+button.tile:focus-visible, .btn:focus-visible, .key:focus-visible, .tab:focus-visible, .chip:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.row.current .tile.filled { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px color-mix(in srgb, var(--accent) 55%, transparent); }
+.tile.reveal { animation: flip .5s ease both; }
+@keyframes flip {
+  0% { transform: rotateX(0); }
+  50% { transform: rotateX(90deg); }
+  100% { transform: rotateX(0); }
+}
+.row.shake { animation: shake .35s ease; }
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+.actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.btn {
+  border: 1px solid var(--border-strong); background: var(--surface); border-radius: 999px;
+  padding: 8px 16px; font-weight: 600; font-size: 14px; cursor: pointer;
+}
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.btn.primary:hover { opacity: .9; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.keyboard { display: grid; gap: 6px; width: 100%; max-width: 500px; }
+.krow { display: flex; gap: 5px; justify-content: center; }
+.key {
+  flex: 1 1 0; min-width: 0; height: 52px; border: 0; border-radius: 6px; background: var(--key);
+  font-weight: 700; font-size: 14px; cursor: pointer; text-transform: uppercase; padding: 0;
+}
+.key.wide { flex: 1.5 1 0; font-size: 12px; }
+.key.B, .key.Y, .key.G { color: var(--tile-text); }
+.key.B { background: var(--gray); }
+.key.Y { background: var(--yellow); }
+.key.G { background: var(--green); }
+.panel { display: flex; flex-direction: column; gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
+.label { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); margin: 0 0 10px; }
+.suggestion { display: flex; gap: 5px; margin-bottom: 12px; }
+.suggestion .tile { --tile: 42px; border-color: var(--border-strong); }
+.meta { color: var(--text-3); font-size: 13px; margin: 0; }
+.solved { font-size: 20px; font-weight: 800; margin: 0 0 4px; }
+.big { font-size: 34px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.top { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.top li { display: grid; grid-template-columns: 62px 1fr 54px; align-items: center; gap: 10px; font-size: 14px; }
+.top .w { font-weight: 700; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+.top .p { text-align: right; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.track { display: block; height: 8px; background: var(--accent-track); border-radius: 4px; overflow: hidden; }
+.fill { display: block; height: 100%; background: var(--accent); border-radius: 4px; min-width: 3px; }
+.spinner {
+  width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent);
+  display: inline-block; animation: spin .8s linear infinite; vertical-align: -3px; margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.skeleton { height: 42px; border-radius: 6px; background: var(--surface-2); margin-bottom: 12px; }
+.watch-form { display: flex; gap: 8px; width: 100%; max-width: 360px; }
+.watch-form input {
+  flex: 1; min-width: 0; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+  border-radius: 999px; padding: 9px 16px; font: inherit; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.chip {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); border-radius: 999px;
+  padding: 3px 10px; font-size: 12px; font-weight: 700; letter-spacing: .06em; cursor: pointer;
+}
+.chip:hover { color: var(--text); border-color: var(--border-strong); }
+.about { margin-top: 36px; border-top: 1px solid var(--border); padding-top: 24px; color: var(--text-2); }
+.about h2 { color: var(--text); font-size: 16px; margin: 0 0 12px; }
+.about-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.about h3 { color: var(--text); font-size: 14px; margin: 0 0 4px; }
+.about p { margin: 0; font-size: 14px; }
+.results { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 20px; }
+.results div { font-size: 13px; color: var(--text-3); }
+.results strong { display: block; color: var(--text); font-size: 22px; font-variant-numeric: tabular-nums; }
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0;
+  background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-weight: 600; font-size: 14px;
+  max-width: calc(100% - 32px); transition: opacity .2s, transform .2s; pointer-events: none; z-index: 20; box-shadow: var(--shadow);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+[hidden] { display: none !important; }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .about-grid { grid-template-columns: minmax(0, 1fr); }
+  .row.over::before { content: none; }
+}
+@media (max-width: 480px) {
+  .brand-name { display: none; }
+  .tab { padding: 6px 11px; }
+  main.wrap { padding-top: 16px; }
+  .key { height: 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile.reveal, .row.shake, .spinner { animation: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <div class="brand"><div class="logo" aria-hidden="true"><span></span><span></span><span></span><span></span></div><span class="brand-name">Wordle Solver</span></div>
+    <div class="tabs" role="tablist" aria-label="Mode">
+      <button class="tab" role="tab" id="tab-solve" aria-selected="true" aria-controls="view-solve">Solve a puzzle</button>
+      <button class="tab" role="tab" id="tab-watch" aria-selected="false" aria-controls="view-watch">Watch it play</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="view-solve" role="tabpanel" aria-labelledby="tab-solve">
+    <div class="layout">
+      <div class="stage">
+        <p class="hint"><strong>Tap the tiles</strong> to match your game's colours, then press <kbd>Enter</kbd>. Played a different word? Just type it.</p>
+        <div class="board" id="board" aria-label="Game board"></div>
+        <div class="actions">
+          <button class="btn primary" id="submit">Submit row</button>
+          <button class="btn" id="undo">Undo</button>
+          <button class="btn" id="new">New game</button>
+        </div>
+        <div class="keyboard" id="keyboard" aria-label="Keyboard"></div>
+      </div>
+      <aside class="panel" aria-live="polite">
+        <div class="card" id="suggest-card"></div>
+        <div class="card stats">
+          <div><p class="label">Candidates left</p><div class="big" id="remaining">–</div></div>
+          <div><p class="label">Guesses used</p><div class="big" id="used">0</div></div>
+        </div>
+        <div class="card">
+          <p class="label">Most likely answers</p>
+          <ul class="top" id="top"></ul>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="view-watch" role="tabpanel" aria-labelledby="tab-watch" hidden>
+    <div class="layout">
+      <div class="stage">
+        <p class="hint">Pick a hidden answer and watch the solver find it, using only the colours it gets back.</p>
+        <form class="watch-form" id="watch-form" autocomplete="off">
+          <label class="sr" for="answer">Answer</label>
+          <input id="answer" maxlength="5" placeholder="ANSWER" spellcheck="false" autocapitalize="characters">
+          <button class="btn primary" type="submit" id="watch-go">Watch</button>
+        </form>
+        <div class="chips" id="chips"></div>
+        <div class="board" id="watch-board" aria-label="Solver's board"></div>
+      </div>
+      <aside class="panel">
+        <div class="card" id="watch-card">
+          <p class="label">Result</p>
+          <p class="meta">Choose a word to start.</p>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="about" aria-labelledby="about-title">
+    <h2 id="about-title">How it works</h2>
+    <div class="about-grid">
+      <div><h3>Every word stays possible</h3><p>All 14,855 valid guesses are candidates, weighted by how common they are in real English text. Obscure words become unlikely, never impossible.</p></div>
+      <div><h3>Guess for information</h3><p>Each guess is scored by its entropy: how evenly its possible colour patterns split the remaining probability. An even split teaches the most.</p></div>
+      <div><h3>Look two steps ahead</h3><p>The top 50 guesses are re-scored by adding the best follow-up's information for every outcome. With one word dominating, it simply goes for the win.</p></div>
+    </div>
+    <div class="results">
+      <div><strong>3.81</strong>mean guesses, original 2,315 answers</div>
+      <div><strong>100%</strong>solved within 6, original answers</div>
+      <div><strong>99.93%</strong>solved within 6, 1,433 real NYT answers since 2022</div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="assertive"></div>
+
+<script>
+const STORAGE_KEY = "wordle-solver-history";
+const NEXT_COLOUR = { B: "Y", Y: "G", G: "B" };
+const COLOUR_NAME = { B: "gray", Y: "yellow", G: "green" };
+const RANK = { B: 1, Y: 2, G: 3 };
+const KEY_ROWS = ["qwertyuiop", "asdfghjkl", "+zxcvbnm-"];
+const EXAMPLES = ["crane", "mocha", "jolly", "gofer", "usury", "nymph"];
+
+const app = { history: [], current: { letters: [], colours: [] }, server: null, busy: false, mode: "solve", revealRow: -1, watching: false };
+const $ = (id) => document.getElementById(id);
+
+function loadSaved() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return Array.isArray(saved) ? saved : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function save() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(app.history)); } catch (error) {}
+}
+
+async function api(path, body) {
+  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = Array.isArray(data.detail) ? "Each guess needs 5 letters and 5 colours." : data.detail;
+    throw new Error(detail || "Something went wrong. Please try again.");
+  }
+  return data;
+}
+
+let toastTimer = null;
+function toast(message) {
+  const element = $("toast");
+  element.textContent = message;
+  element.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => element.classList.remove("show"), 3600);
+}
+
+function prefill(word) {
+  app.current = word ? { letters: word.split(""), colours: Array(5).fill("B") } : { letters: [], colours: [] };
+}
+
+async function refresh(history, { reveal = false } = {}) {
+  app.busy = true;
+  render();
+  try {
+    const result = await api("/api/state", { history });
+    const grew = result.history.length > app.history.length;
+    app.history = result.history;
+    app.server = result;
+    app.revealRow = reveal && grew ? result.history.length - 1 : -1;
+    prefill(result.suggestion);
+    save();
+    return true;
+  } catch (error) {
+    toast(error.message);
+    shakeCurrent();
+    return false;
+  } finally {
+    app.busy = false;
+    render();
+  }
+}
+
+function shakeCurrent() {
+  const row = document.querySelector("#board .row.current");
+  if (!row) return;
+  row.classList.remove("shake");
+  void row.offsetWidth;
+  row.classList.add("shake");
+}
+
+function submitRow() {
+  if (app.busy || (app.server && app.server.solved)) return;
+  if (app.current.letters.length !== 5) {
+    toast("Enter all 5 letters first.");
+    shakeCurrent();
+    return;
+  }
+  const row = { word: app.current.letters.join(""), pattern: app.current.colours.join("") };
+  refresh([...app.history, row], { reveal: true });
+}
+
+function undo() {
+  if (app.busy) return;
+  if (!app.history.length) { toast("Nothing to undo."); return; }
+  refresh(app.history.slice(0, -1));
+}
+
+function newGame() {
+  if (app.busy) return;
+  refresh([]);
+}
+
+function typeLetter(letter) {
+  if (app.busy || (app.server && app.server.solved) || app.current.letters.length >= 5) return;
+  app.current.letters.push(letter);
+  app.current.colours.push("B");
+  render();
+}
+
+function backspace() {
+  if (app.busy || !app.current.letters.length) return;
+  app.current.letters.pop();
+  app.current.colours.pop();
+  render();
+}
+
+function cycleColour(position) {
+  if (app.busy || position >= app.current.letters.length) return;
+  app.current.colours[position] = NEXT_COLOUR[app.current.colours[position]];
+  render();
+  const tile = document.querySelector(`#board .row.current .tile[data-position="${position}"]`);
+  if (tile) tile.focus();
+}
+
+function tile(letter, colour, extra = "") {
+  const element = document.createElement("div");
+  element.className = `tile ${letter ? "filled" : ""} ${colour || ""} ${extra}`.trim();
+  element.textContent = letter || "";
+  return element;
+}
+
+function rowElement(rowIndex, maxGuesses) {
+  const row = document.createElement("div");
+  row.className = "row";
+  if (rowIndex >= maxGuesses) row.classList.add("over");
+  return row;
+}
+
+function renderBoard() {
+  const board = $("board");
+  board.replaceChildren();
+  const maxGuesses = app.server ? app.server.max_guesses : 6;
+  const solved = app.server && app.server.solved;
+  const rows = Math.max(maxGuesses, app.history.length + (solved ? 0 : 1));
+  const revealRow = app.revealRow;
+  app.revealRow = -1;
+  for (let r = 0; r < rows; r++) {
+    const row = rowElement(r, maxGuesses);
+    if (r < app.history.length) {
+      const { word, pattern } = app.history[r];
+      row.setAttribute("aria-label", `Guess ${r + 1}: ${word}, ${[...pattern].map((c) => COLOUR_NAME[c]).join(", ")}`);
+      [...word].forEach((letter, i) => {
+        const t = tile(letter, pattern[i], r === revealRow ? "reveal" : "");
+        if (r === revealRow) t.style.animationDelay = `${i * 120}ms`;
+        row.append(t);
+      });
+    } else if (r === app.history.length && !solved) {
+      row.classList.add("current");
+      for (let i = 0; i < 5; i++) {
+        const letter = app.current.letters[i];
+        if (letter) {
+          const button = tile(letter, app.current.colours[i]);
+          const element = document.createElement("button");
+          element.className = button.className;
+          element.textContent = letter;
+          element.dataset.position = i;
+          element.setAttribute("aria-label", `Letter ${letter.toUpperCase()}, position ${i + 1}, ${COLOUR_NAME[app.current.colours[i]]}. Click to change colour.`);
+          element.addEventListener("click", () => cycleColour(i));
+          row.append(element);
+        } else {
+          row.append(tile("", ""));
+        }
+      }
+    } else {
+      for (let i = 0; i < 5; i++) row.append(tile("", ""));
+    }
+    board.append(row);
+  }
+}
+
+function letterStates() {
+  const states = {};
+  for (const { word, pattern } of app.history) {
+    [...word].forEach((letter, i) => {
+      if (!states[letter] || RANK[pattern[i]] > RANK[states[letter]]) states[letter] = pattern[i];
+    });
+  }
+  return states;
+}
+
+function renderKeyboard() {
+  const keyboard = $("keyboard");
+  keyboard.replaceChildren();
+  const states = letterStates();
+  for (const keys of KEY_ROWS) {
+    const row = document.createElement("div");
+    row.className = "krow";
+    for (const key of keys) {
+      const button = document.createElement("button");
+      button.className = "key";
+      if (key === "+") {
+        button.textContent = "Enter";
+        button.classList.add("wide");
+        button.addEventListener("click", submitRow);
+      } else if (key === "-") {
+        button.textContent = "⌫";
+        button.classList.add("wide");
+        button.setAttribute("aria-label", "Backspace");
+        button.addEventListener("click", backspace);
+      } else {
+        button.textContent = key;
+        if (states[key]) button.classList.add(states[key]);
+        button.addEventListener("click", () => typeLetter(key));
+      }
+      row.append(button);
+    }
+    keyboard.append(row);
+  }
+}
+
+function formatPercent(probability) {
+  const percent = probability * 100;
+  if (percent >= 10) return `${percent.toFixed(0)}%`;
+  if (percent >= 1) return `${percent.toFixed(1)}%`;
+  if (percent >= 0.01) return `${percent.toFixed(2)}%`;
+  return "<0.01%";
+}
+
+function suggestionTiles(word) {
+  const wrap = document.createElement("div");
+  wrap.className = "suggestion";
+  for (const letter of word) wrap.append(tile(letter, ""));
+  return wrap;
+}
+
+function renderPanel() {
+  const card = $("suggest-card");
+  card.replaceChildren();
+  const label = document.createElement("p");
+  label.className = "label";
+  const server = app.server;
+  if (server && server.solved) {
+    label.textContent = "Result";
+    const solved = document.createElement("p");
+    solved.className = "solved";
+    const n = server.history.length;
+    solved.textContent = n <= server.max_guesses ? `Solved in ${n} ${n === 1 ? "guess" : "guesses"}` : `Solved in ${n} guesses (over the limit)`;
+    const meta = document.createElement("p");
+    meta.className = "meta";
+    meta.textContent = "Start a new game for tomorrow's puzzle.";
+    card.append(label, solved, meta);
+  } else if (app.busy || !server) {
+    label.textContent = "Next guess";
+    const skeleton = document.createElement("div");
+    skeleton.className = "skeleton";
+    const meta = document.createElement("p");
+    meta.className = "meta";
+    meta.innerHTML = '<span class="spinner" aria-hidden="true"></span>Looking two guesses ahead…';
+    card.append(label, skeleton, meta);
+  } else {
+    label.textContent = "Next guess";
+    const meta = document.createElement("p");
+    meta.className = "meta";
+    const seconds = server.suggestion_seconds;
+    meta.textContent = seconds < 0.05 ? "Chosen by 2-step entropy lookahead." : `Chosen by 2-step entropy lookahead in ${seconds.toFixed(1)} s.`;
+    const use = document.createElement("button");
+    use.className = "btn";
+    use.style.marginTop = "12px";
+    use.textContent = "Reset row to this word";
+    use.addEventListener("click", () => { prefill(server.suggestion); render(); });
+    card.append(label, suggestionTiles(server.suggestion), meta, use);
+  }
+
+  $("remaining").textContent = server ? server.remaining.toLocaleString() : "–";
+  $("used").textContent = app.history.length;
+  const top = $("top");
+  top.replaceChildren();
+  if (server) {
+    const highest = Math.max(...server.top.map((c) => c.probability), 1e-9);
+    for (const { word, probability } of server.top) {
+      const item = document.createElement("li");
+      item.innerHTML = `<span class="w"></span><span class="track"><span class="fill"></span></span><span class="p"></span>`;
+      item.querySelector(".w").textContent = word.toUpperCase();
+      item.querySelector(".fill").style.width = `${(probability / highest) * 100}%`;
+      item.querySelector(".p").textContent = formatPercent(probability);
+      item.title = `${word.toUpperCase()}: ${(probability * 100).toFixed(2)}% likely`;
+      top.append(item);
+    }
+  }
+  $("submit").disabled = app.busy || Boolean(server && server.solved);
+  $("undo").disabled = app.busy || !app.history.length;
+  $("new").disabled = app.busy;
+}
+
+function render() {
+  renderBoard();
+  renderKeyboard();
+  renderPanel();
+}
+
+function setMode(mode) {
+  app.mode = mode;
+  $("tab-solve").setAttribute("aria-selected", String(mode === "solve"));
+  $("tab-watch").setAttribute("aria-selected", String(mode === "watch"));
+  $("view-solve").hidden = mode !== "solve";
+  $("view-watch").hidden = mode !== "watch";
+  if (mode === "watch") $("answer").focus();
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function renderWatchBoard(rows, maxGuesses, revealIndex) {
+  const board = $("watch-board");
+  board.replaceChildren();
+  const total = Math.max(maxGuesses, rows.length);
+  for (let r = 0; r < total; r++) {
+    const row = rowElement(r, maxGuesses);
+    for (let i = 0; i < 5; i++) {
+      if (r < rows.length) {
+        const t = tile(rows[r].word[i], rows[r].pattern[i], r === revealIndex ? "reveal" : "");
+        if (r === revealIndex) t.style.animationDelay = `${i * 120}ms`;
+        row.append(t);
+      } else {
+        row.append(tile("", ""));
+      }
+    }
+    board.append(row);
+  }
+}
+
+function watchCard(lines) {
+  const card = $("watch-card");
+  card.replaceChildren();
+  const label = document.createElement("p");
+  label.className = "label";
+  label.textContent = "Result";
+  card.append(label, ...lines);
+}
+
+async function watch(answer) {
+  if (app.watching) return;
+  answer = answer.trim().toLowerCase();
+  if (answer.length !== 5) { toast("Enter a 5-letter answer."); return; }
+  app.watching = true;
+  $("watch-go").disabled = true;
+  const thinking = document.createElement("p");
+  thinking.className = "meta";
+  thinking.innerHTML = '<span class="spinner" aria-hidden="true"></span>Solving…';
+  watchCard([thinking]);
+  try {
+    const result = await api("/api/simulate", { answer });
+    renderWatchBoard([], result.max_guesses, -1);
+    for (let r = 0; r < result.rows.length; r++) {
+      renderWatchBoard(result.rows.slice(0, r + 1), result.max_guesses, r);
+      await sleep(750);
+    }
+    const n = result.rows.length;
+    const headline = document.createElement("p");
+    headline.className = "solved";
+    headline.textContent = n <= result.max_guesses ? `${result.answer.toUpperCase()} in ${n} ${n === 1 ? "guess" : "guesses"}` : `${result.answer.toUpperCase()} took ${n} guesses`;
+    const meta = document.createElement("p");
+    meta.className = "meta";
+    meta.textContent = n <= result.max_guesses ? `Solved in ${result.seconds.toFixed(1)} s of thinking.` : "Over the 6-guess limit: rare words get a low prior, so common look-alikes are tried first.";
+    watchCard([headline, meta]);
+  } catch (error) {
+    toast(error.message);
+    const meta = document.createElement("p");
+    meta.className = "meta";
+    meta.textContent = "Choose a word to start.";
+    watchCard([meta]);
+  } finally {
+    app.watching = false;
+    $("watch-go").disabled = false;
+  }
+}
+
+function setupWatch() {
+  renderWatchBoard([], 6, -1);
+  for (const word of EXAMPLES) {
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.type = "button";
+    chip.textContent = word.toUpperCase();
+    chip.addEventListener("click", () => { $("answer").value = word.toUpperCase(); watch(word); });
+    $("chips").append(chip);
+  }
+  $("watch-form").addEventListener("submit", (event) => { event.preventDefault(); watch($("answer").value); });
+}
+
+document.addEventListener("keydown", (event) => {
+  if (app.mode !== "solve" || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.target instanceof HTMLInputElement) return;
+  if (event.key === "Enter") {
+    if (event.target instanceof HTMLButtonElement && !event.target.classList.contains("tile")) return;
+    event.preventDefault();
+    submitRow();
+  } else if (event.key === "Backspace") {
+    event.preventDefault();
+    backspace();
+  } else if (/^[a-zA-Z]$/.test(event.key)) {
+    typeLetter(event.key.toLowerCase());
+  }
+});
+
+$("submit").addEventListener("click", submitRow);
+$("undo").addEventListener("click", undo);
+$("new").addEventListener("click", newGame);
+$("tab-solve").addEventListener("click", () => setMode("solve"));
+$("tab-watch").addEventListener("click", () => setMode("watch"));
+setupWatch();
+render();
+refresh(loadSaved()).then((ok) => { if (!ok) refresh([]); });
+</script>
+</body>
+</html>
